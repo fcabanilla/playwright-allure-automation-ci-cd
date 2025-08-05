@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  playwright-tests:
+    build: .
+    container_name: playwright-demoqa-automation
+    volumes:
+      - ./playwright-test-results:/app/playwright-test-results
+      - ./allure-results:/app/allure-results
+    environment:
+      - CI=true
+      - NODE_ENV=development
+    networks:
+      - playwright-network
+
+networks:
+  playwright-network:
+    driver: bridge
