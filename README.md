@@ -1,6 +1,7 @@
 # 🎭 Playwright Allure Automation CI/CD
 
-Un framework robusto de automatización de pruebas web usando **Playwright** con reportes **Allure** y optimización de rendimiento avanzada.
+Un framework robusto de automatización de pruebas web usando **Playwright** con
+reportes **Allure** y optimización de rendimiento avanzada.
 
 ## 🚀 Características Principales
 
@@ -40,7 +41,7 @@ npm run format            # Formatear código
 ```text
 📦 Estructura del Proyecto
 ├── tests/demoqa/books/         # Casos de prueba
-├── pageObjectsManagers/        # Page Object Models  
+├── pageObjectsManagers/        # Page Object Models
 ├── fixtures/                   # Fixtures personalizados
 ├── utils/                      # WebActions y utilidades
 ├── config/                     # Configuraciones
@@ -49,9 +50,9 @@ npm run format            # Formatear código
 
 ## 🎯 Optimizaciones de Performance
 
-| Workers | Tiempo | Éxito | Estado |
-|---------|--------|-------|--------|
-| 6       | 40.8s  | 100%  | ✅ Óptimo |
+| Workers | Tiempo | Éxito | Estado        |
+| ------- | ------ | ----- | ------------- |
+| 6       | 40.8s  | 100%  | ✅ Óptimo     |
 | 8       | 42.1s  | 85%   | ⚠️ Contención |
 | 10      | 45.3s  | 70%   | ❌ Sobrecarga |
 

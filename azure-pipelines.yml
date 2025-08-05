@@ -1,16 +1,17 @@
-# Azure Pipelines para Playwright + Allure + Docker
-# Pipeline CI/CD completo para automatización de pruebas
-
+# Multi-stage pipeline for Playwright Allure Automation Framework
+# Optimized for performance with 6 workers and comprehensive reporting
 trigger:
   branches:
     include:
       - main
       - develop
       - feature/*
+      - release/*
   paths:
     exclude:
       - README.md
       - docs/*
+      - '*.md'
 
 pr:
   branches:
@@ -19,17 +20,17 @@ pr:
       - develop
 
 variables:
-  # Variables de configuración
+  # Node.js and tooling versions
   - name: nodeVersion
     value: '18.x'
   - name: dockerImageName
-    value: 'playwright-demoqa-tests'
+    value: 'playwright-allure-automation'
   - name: allureVersion
-    value: '2.29.0'
-  
-  # Variables de entorno para tests
+    value: '2.30.0'
+
+  # Environment configuration
   - name: ENVIRONMENT
-    value: 'staging'
+    value: 'prod'
   - name: BASE_URL
     value: 'https://demoqa.com'
   - name: HEADLESS
@@ -38,296 +39,376 @@ variables:
     value: 'true'
 
 stages:
-  # Etapa 1: Build y Validación
-  - stage: Build
-    displayName: 'Build and Validate'
-    jobs:
-      - job: BuildAndLint
-        displayName: 'Build, Install Dependencies and Lint'
-        pool:
-          vmImage: 'ubuntu-latest'
-        
-        steps:
-          - task: NodeTool@0
-            displayName: 'Install Node.js'
-            inputs:
-              versionSpec: $(nodeVersion)
+# ============================================================================
+# STAGE 1: Build and Validation
+# ============================================================================
+- stage: Build
+  displayName: '🏗️ Build and Validate'
+  jobs:
+    - job: BuildAndValidate
+      displayName: 'Install Dependencies and Code Quality'
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        - checkout: self
+          displayName: '📥 Checkout source code'
           
-          - task: Cache@2
-            displayName: 'Cache node modules'
-            inputs:
-              key: 'npm | "$(Agent.OS)" | package-lock.json'
-              restoreKeys: |
-                npm | "$(Agent.OS)"
-              path: ~/.npm
+        - task: NodeTool@0
+          displayName: '📦 Install Node.js $(nodeVersion)'
+          inputs:
+            versionSpec: $(nodeVersion)
+            
+        - task: Cache@2
+          displayName: '💾 Cache NPM packages'
+          inputs:
+            key: 'npm | "$(Agent.OS)" | package-lock.json'
+            restoreKeys: |
+              npm | "$(Agent.OS)"
+            path: ~/.npm
+            
+        - script: npm ci
+          displayName: '📦 Install NPM dependencies'
           
-          - script: |
-              npm ci
-            displayName: 'Install dependencies'
+        - script: npm run lint
+          displayName: '🔍 Run ESLint validation'
+          continueOnError: true
           
-          - script: |
-              npm run lint
-            displayName: 'Run ESLint'
-            continueOnError: true
+        - script: npm run prettier
+          displayName: '✨ Check code formatting'
+          continueOnError: true
           
-          - script: |
-              npm run prettier
-            displayName: 'Check code formatting'
-            continueOnError: true
+        - script: npx playwright install --with-deps chromium
+          displayName: '🎭 Install Playwright (Chromium only for validation)'
           
-          - script: |
-              npx playwright install --with-deps chromium
-            displayName: 'Install Playwright browsers'
-          
-          - task: PublishPipelineArtifact@1
-            displayName: 'Publish build artifacts'
-            inputs:
-              targetPath: '$(Build.SourcesDirectory)'
-              artifact: 'build-artifacts'
+        - task: PublishPipelineArtifact@1
+          displayName: '📦 Publish build artifacts'
+          inputs:
+            targetPath: '$(Build.SourcesDirectory)'
+            artifact: 'build-artifacts'
 
-  # Etapa 2: Tests con Docker
-  - stage: TestWithDocker
-    displayName: 'Run Tests with Docker'
-    dependsOn: Build
-    condition: succeeded()
-    jobs:
-      - job: DockerTests
-        displayName: 'Run Tests in Docker Container'
-        pool:
-          vmImage: 'ubuntu-latest'
-        
-        steps:
-          - task: DownloadPipelineArtifact@2
-            displayName: 'Download build artifacts'
-            inputs:
-              artifactName: 'build-artifacts'
-              targetPath: '$(Build.SourcesDirectory)'
+# ============================================================================
+# STAGE 2: Multi-Platform Testing
+# ============================================================================
+- stage: Test
+  displayName: '🧪 Multi-Platform Testing'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+    # ========================================================================
+    # Docker Tests (Linux Container)
+    # ========================================================================
+    - job: DockerTests
+      displayName: '🐳 Docker Container Tests'
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        - task: DownloadPipelineArtifact@2
+          displayName: '📥 Download build artifacts'
+          inputs:
+            artifactName: 'build-artifacts'
+            targetPath: '$(Build.SourcesDirectory)'
+            
+        - script: docker build -t $(dockerImageName) .
+          displayName: '🏗️ Build Docker image'
           
-          - script: |
-              docker build -t $(dockerImageName) .
-            displayName: 'Build Docker image'
+        - script: |
+            docker run --rm \
+              -e ENVIRONMENT=$(ENVIRONMENT) \
+              -e BASE_URL=$(BASE_URL) \
+              -e HEADLESS=$(HEADLESS) \
+              -e CI=$(CI) \
+              -v $(Build.SourcesDirectory)/allure-results:/app/allure-results \
+              -v $(Build.SourcesDirectory)/test-results:/app/test-results \
+              -v $(Build.SourcesDirectory)/playwright-report:/app/playwright-report \
+              $(dockerImageName) npm run test:ci
+          displayName: '🧪 Run tests in Docker (3 workers)'
+          continueOnError: true
           
-          - script: |
-              docker run --rm \
-                -e ENVIRONMENT=$(ENVIRONMENT) \
-                -e BASE_URL=$(BASE_URL) \
-                -e HEADLESS=$(HEADLESS) \
-                -e CI=$(CI) \
-                -v $(Build.SourcesDirectory)/allure-results:/app/allure-results \
-                -v $(Build.SourcesDirectory)/test-results:/app/test-results \
-                $(dockerImageName) npm test
-            displayName: 'Run tests in Docker'
-            continueOnError: true
-          
-          - task: PublishTestResults@2
-            displayName: 'Publish test results'
-            condition: always()
-            inputs:
-              testResultsFormat: 'JUnit'
-              testResultsFiles: '**/results.xml'
-              testRunTitle: 'Playwright Tests (Docker)'
-          
-          - task: PublishPipelineArtifact@1
-            displayName: 'Publish Allure results'
-            condition: always()
-            inputs:
-              targetPath: '$(Build.SourcesDirectory)/allure-results'
-              artifact: 'allure-results-docker'
+        - task: PublishTestResults@2
+          displayName: '📊 Publish JUnit test results'
+          condition: always()
+          inputs:
+            testResultsFormat: 'JUnit'
+            testResultsFiles: '**/results.xml'
+            testRunTitle: 'Playwright Tests (Docker)'
+            
+        - task: PublishPipelineArtifact@1
+          displayName: '📦 Publish Allure results (Docker)'
+          condition: always()
+          inputs:
+            targetPath: '$(Build.SourcesDirectory)/allure-results'
+            artifact: 'allure-results-docker'
 
-  # Etapa 3: Tests Nativos (sin Docker)
-  - stage: TestNative
-    displayName: 'Run Tests Natively'
-    dependsOn: Build
-    condition: succeeded()
-    jobs:
-      - job: SmokeTests
-        displayName: 'Smoke Tests'
-        pool:
-          vmImage: 'ubuntu-latest'
-        strategy:
-          matrix:
-            Chrome:
-              BROWSER: 'chromium'
-            Firefox:
-              BROWSER: 'firefox'
-            Safari:
-              BROWSER: 'webkit'
-        
-        steps:
-          - task: DownloadPipelineArtifact@2
-            displayName: 'Download build artifacts'
-            inputs:
-              artifactName: 'build-artifacts'
-              targetPath: '$(Build.SourcesDirectory)'
+    # ========================================================================
+    # Smoke Tests (Multi-Browser)
+    # ========================================================================
+    - job: SmokeTests
+      displayName: '💨 Smoke Tests (Multi-Browser)'
+      pool:
+        vmImage: 'ubuntu-latest'
+      strategy:
+        matrix:
+          Chrome:
+            BROWSER: 'chromium'
+          Firefox:
+            BROWSER: 'firefox'
+          Safari:
+            BROWSER: 'webkit'
+      steps:
+        - task: DownloadPipelineArtifact@2
+          displayName: '📥 Download build artifacts'
+          inputs:
+            artifactName: 'build-artifacts'
+            targetPath: '$(Build.SourcesDirectory)'
+            
+        - task: NodeTool@0
+          displayName: '📦 Install Node.js'
+          inputs:
+            versionSpec: $(nodeVersion)
+            
+        - script: npm ci
+          displayName: '📦 Install dependencies'
           
-          - task: NodeTool@0
-            displayName: 'Install Node.js'
-            inputs:
-              versionSpec: $(nodeVersion)
+        - script: npx playwright install --with-deps $(BROWSER)
+          displayName: '🎭 Install Playwright browser ($(BROWSER))'
           
-          - script: |
-              npm ci
-            displayName: 'Install dependencies'
+        - script: npm run test:ci:smoke -- --project=$(BROWSER)
+          displayName: '💨 Run smoke tests ($(BROWSER))'
+          env:
+            ENVIRONMENT: $(ENVIRONMENT)
+            BASE_URL: $(BASE_URL)
+            HEADLESS: $(HEADLESS)
+            CI: $(CI)
+          continueOnError: true
           
-          - script: |
-              npx playwright install --with-deps $(BROWSER)
-            displayName: 'Install Playwright browser'
-          
-          - script: |
-              npm run test:smoke -- --project=$(BROWSER)
-            displayName: 'Run smoke tests'
-            env:
-              ENVIRONMENT: $(ENVIRONMENT)
-              BASE_URL: $(BASE_URL)
-              HEADLESS: $(HEADLESS)
-              CI: $(CI)
-            continueOnError: true
-          
-          - task: PublishTestResults@2
-            displayName: 'Publish test results'
-            condition: always()
-            inputs:
-              testResultsFormat: 'JUnit'
-              testResultsFiles: '**/results.xml'
-              testRunTitle: 'Smoke Tests - $(BROWSER)'
-          
-          - task: PublishPipelineArtifact@1
-            displayName: 'Publish Allure results'
-            condition: always()
-            inputs:
-              targetPath: '$(Build.SourcesDirectory)/allure-results'
-              artifact: 'allure-results-$(BROWSER)'
+        - task: PublishTestResults@2
+          displayName: '📊 Publish test results ($(BROWSER))'
+          condition: always()
+          inputs:
+            testResultsFormat: 'JUnit'
+            testResultsFiles: '**/results.xml'
+            testRunTitle: 'Smoke Tests - $(BROWSER)'
+            
+        - task: PublishPipelineArtifact@1
+          displayName: '📦 Publish Allure results ($(BROWSER))'
+          condition: always()
+          inputs:
+            targetPath: '$(Build.SourcesDirectory)/allure-results'
+            artifact: 'allure-results-$(BROWSER)'
 
-      - job: RegressionTests
-        displayName: 'Full Regression Tests'
-        pool:
-          vmImage: 'ubuntu-latest'
-        dependsOn: SmokeTests
-        condition: succeeded()
-        
-        steps:
-          - task: DownloadPipelineArtifact@2
-            displayName: 'Download build artifacts'
-            inputs:
-              artifactName: 'build-artifacts'
-              targetPath: '$(Build.SourcesDirectory)'
+    # ========================================================================
+    # Full Regression Tests
+    # ========================================================================
+    - job: RegressionTests
+      displayName: '🔄 Full Regression Suite'
+      pool:
+        vmImage: 'ubuntu-latest'
+      dependsOn: SmokeTests
+      condition: succeeded()
+      steps:
+        - task: DownloadPipelineArtifact@2
+          displayName: '📥 Download build artifacts'
+          inputs:
+            artifactName: 'build-artifacts'
+            targetPath: '$(Build.SourcesDirectory)'
+            
+        - task: NodeTool@0
+          displayName: '📦 Install Node.js'
+          inputs:
+            versionSpec: $(nodeVersion)
+            
+        - script: npm ci
+          displayName: '📦 Install dependencies'
           
-          - task: NodeTool@0
-            displayName: 'Install Node.js'
-            inputs:
-              versionSpec: $(nodeVersion)
+        - script: npx playwright install --with-deps
+          displayName: '🎭 Install all Playwright browsers'
           
-          - script: |
-              npm ci
-            displayName: 'Install dependencies'
+        - script: npm run test:ci:regression
+          displayName: '🔄 Run regression tests (3 workers for stability)'
+          env:
+            ENVIRONMENT: $(ENVIRONMENT)
+            BASE_URL: $(BASE_URL)
+            HEADLESS: $(HEADLESS)
+            CI: $(CI)
+          continueOnError: true
           
-          - script: |
-              npx playwright install --with-deps
-            displayName: 'Install all Playwright browsers'
-          
-          - script: |
-              npm run test:regression
-            displayName: 'Run regression tests'
-            env:
-              ENVIRONMENT: $(ENVIRONMENT)
-              BASE_URL: $(BASE_URL)
-              HEADLESS: $(HEADLESS)
-              CI: $(CI)
-              WORKERS: 3
-            continueOnError: true
-          
-          - task: PublishTestResults@2
-            displayName: 'Publish test results'
-            condition: always()
-            inputs:
-              testResultsFormat: 'JUnit'
-              testResultsFiles: '**/results.xml'
-              testRunTitle: 'Regression Tests'
-          
-          - task: PublishPipelineArtifact@1
-            displayName: 'Publish Allure results'
-            condition: always()
-            inputs:
-              targetPath: '$(Build.SourcesDirectory)/allure-results'
-              artifact: 'allure-results-regression'
+        - task: PublishTestResults@2
+          displayName: '📊 Publish regression test results'
+          condition: always()
+          inputs:
+            testResultsFormat: 'JUnit'
+            testResultsFiles: '**/results.xml'
+            testRunTitle: 'Regression Tests'
+            
+        - task: PublishPipelineArtifact@1
+          displayName: '📦 Publish Allure results (Regression)'
+          condition: always()
+          inputs:
+            targetPath: '$(Build.SourcesDirectory)/allure-results'
+            artifact: 'allure-results-regression'
 
-  # Etapa 4: Generación de Reportes
-  - stage: Reports
-    displayName: 'Generate and Publish Reports'
-    dependsOn: 
-      - TestWithDocker
-      - TestNative
-    condition: always()
-    jobs:
-      - job: AllureReports
-        displayName: 'Generate Allure Reports'
-        pool:
-          vmImage: 'ubuntu-latest'
-        
-        steps:
-          - task: DownloadPipelineArtifact@2
-            displayName: 'Download Docker results'
-            inputs:
-              artifactName: 'allure-results-docker'
-              targetPath: '$(Build.SourcesDirectory)/combined-results'
-            continueOnError: true
+    # ========================================================================
+    # Windows Compatibility Tests
+    # ========================================================================
+    - job: WindowsTests
+      displayName: '🪟 Windows Compatibility Tests'
+      pool:
+        vmImage: 'windows-latest'
+      steps:
+        - task: DownloadPipelineArtifact@2
+          displayName: '📥 Download build artifacts'
+          inputs:
+            artifactName: 'build-artifacts'
+            targetPath: '$(Build.SourcesDirectory)'
+            
+        - task: NodeTool@0
+          displayName: '📦 Install Node.js'
+          inputs:
+            versionSpec: $(nodeVersion)
+            
+        - script: npm ci
+          displayName: '📦 Install dependencies'
           
-          - task: DownloadPipelineArtifact@2
-            displayName: 'Download Chrome results'
-            inputs:
-              artifactName: 'allure-results-chromium'
-              targetPath: '$(Build.SourcesDirectory)/combined-results'
-            continueOnError: true
+        - script: npx playwright install --with-deps
+          displayName: '🎭 Install Playwright browsers'
           
-          - task: DownloadPipelineArtifact@2
-            displayName: 'Download Regression results'
-            inputs:
-              artifactName: 'allure-results-regression'
-              targetPath: '$(Build.SourcesDirectory)/combined-results'
-            continueOnError: true
+        - script: npm run test:ci
+          displayName: '🧪 Run full test suite (Windows - 3 workers)'
+          env:
+            ENVIRONMENT: $(ENVIRONMENT)
+            BASE_URL: $(BASE_URL)
+            HEADLESS: $(HEADLESS)
+            CI: $(CI)
+          continueOnError: true
           
-          - script: |
-              npm install -g allure-commandline@$(allureVersion)
-            displayName: 'Install Allure CLI'
-          
-          - script: |
-              allure generate combined-results --output allure-report --clean
-            displayName: 'Generate Allure report'
-          
-          - task: PublishPipelineArtifact@1
-            displayName: 'Publish Allure HTML report'
-            inputs:
-              targetPath: '$(Build.SourcesDirectory)/allure-report'
-              artifact: 'allure-html-report'
-          
-          # Opcional: Publicar en Azure Blob Storage o similar
-          - script: |
-              echo "Allure report generated successfully"
-              echo "Download the artifact 'allure-html-report' to view the complete test report"
-            displayName: 'Report generation summary'
+        - task: PublishTestResults@2
+          displayName: '📊 Publish Windows test results'
+          condition: always()
+          inputs:
+            testResultsFormat: 'JUnit'
+            testResultsFiles: '**/results.xml'
+            testRunTitle: 'Playwright Tests (Windows)'
+            
+        - task: PublishPipelineArtifact@1
+          displayName: '📦 Publish Allure results (Windows)'
+          condition: always()
+          inputs:
+            targetPath: '$(Build.SourcesDirectory)/allure-results'
+            artifact: 'allure-results-windows'
 
-  # Etapa 5: Notificaciones (opcional)
-  - stage: Notifications
-    displayName: 'Send Notifications'
-    dependsOn: Reports
-    condition: always()
-    jobs:
-      - job: SendNotifications
-        displayName: 'Send Test Results Notifications'
-        pool:
-          vmImage: 'ubuntu-latest'
-        
-        steps:
-          - script: |
-              echo "Pipeline completed: $(Build.BuildNumber)"
-              echo "Status: $(Agent.JobStatus)"
-              echo "Branch: $(Build.SourceBranchName)"
-              echo "Commit: $(Build.SourceVersion)"
-            displayName: 'Pipeline summary'
+# ============================================================================
+# STAGE 3: Report Generation and Aggregation
+# ============================================================================
+- stage: Report
+  displayName: '📊 Generate Consolidated Reports'
+  dependsOn: Test
+  condition: always()
+  jobs:
+    - job: AllureReport
+      displayName: '📋 Generate Allure HTML Report'
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        # Download all test results from different jobs
+        - task: DownloadPipelineArtifact@2
+          displayName: '📥 Download Docker results'
+          inputs:
+            artifactName: 'allure-results-docker'
+            targetPath: '$(Build.SourcesDirectory)/combined-results'
+          continueOnError: true
           
-          # Aquí puedes agregar integraciones con Slack, Teams, email, etc.
-          # Ejemplo para Teams:
-          # - task: TeamsFx@1
-          #   inputs:
-          #     webhookUrl: $(TeamsWebhookUrl)
-          #     message: 'Test execution completed for build $(Build.BuildNumber)'
+        - task: DownloadPipelineArtifact@2
+          displayName: '📥 Download Chrome results'
+          inputs:
+            artifactName: 'allure-results-chromium'
+            targetPath: '$(Build.SourcesDirectory)/combined-results'
+          continueOnError: true
+          
+        - task: DownloadPipelineArtifact@2
+          displayName: '📥 Download Firefox results'
+          inputs:
+            artifactName: 'allure-results-firefox'
+            targetPath: '$(Build.SourcesDirectory)/combined-results'
+          continueOnError: true
+          
+        - task: DownloadPipelineArtifact@2
+          displayName: '📥 Download Safari results'
+          inputs:
+            artifactName: 'allure-results-webkit'
+            targetPath: '$(Build.SourcesDirectory)/combined-results'
+          continueOnError: true
+          
+        - task: DownloadPipelineArtifact@2
+          displayName: '📥 Download Regression results'
+          inputs:
+            artifactName: 'allure-results-regression'
+            targetPath: '$(Build.SourcesDirectory)/combined-results'
+          continueOnError: true
+          
+        - task: DownloadPipelineArtifact@2
+          displayName: '📥 Download Windows results'
+          inputs:
+            artifactName: 'allure-results-windows'
+            targetPath: '$(Build.SourcesDirectory)/combined-results'
+          continueOnError: true
+          
+        # Install Allure CLI
+        - script: npm install -g allure-commandline@$(allureVersion)
+          displayName: '🔧 Install Allure CLI'
+          
+        # Generate Allure HTML report locally and publish as artifact
+        - script: |
+            echo "📊 Generating consolidated Allure report..."
+            echo "Results found in combined-results:"
+            find "$(Build.SourcesDirectory)/combined-results" -name "*.json" | wc -l || true
+            allure generate "$(Build.SourcesDirectory)/combined-results" --clean -o "$(Build.SourcesDirectory)/allure-report" || echo "Allure generation failed, continuing..."
+            echo "✅ Allure report generation completed"
+          displayName: '📋 Generate Allure HTML report'
+          
+        # Publish artifacts
+        - task: PublishPipelineArtifact@1
+          displayName: '📦 Publish Allure HTML report'
+          inputs:
+            targetPath: '$(Build.SourcesDirectory)/allure-report'
+            artifact: 'allure-html-report'
+            
+        - task: PublishPipelineArtifact@1
+          displayName: '📦 Publish combined raw results'
+          inputs:
+            targetPath: '$(Build.SourcesDirectory)/combined-results'
+            artifact: 'allure-results-combined'
+
+# ============================================================================
+# STAGE 4: Summary and Cleanup
+# ============================================================================
+- stage: Summary
+  displayName: '� Pipeline Summary'
+  dependsOn: Report
+  condition: always()
+  jobs:
+    - job: PipelineSummary
+      displayName: '📊 Display Pipeline Summary'
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        - script: |
+            echo "📊 Test Execution Summary:"
+            echo "========================="
+            echo "🎭 Framework: Playwright with Allure"
+            echo "🔧 Workers: 6 (local) / 3 (CI)"
+            echo "🌐 Browsers: Chrome, Firefox, Safari"
+            echo "� Platforms: Linux (Docker), Linux (Native), Windows"
+            echo "📋 Reports: Download 'allure-html-report' artifact"
+            echo "📝 JUnit Results: Available in Azure DevOps Tests tab"
+            echo "========================="
+            echo ""
+            echo "📥 Available Artifacts:"
+            echo "- allure-html-report (Complete test report)"
+            echo "- allure-results-combined (Raw test data)"
+            echo "- Individual browser results"
+            echo ""
+            echo "🔗 To view Allure report:"
+            echo "1. Download 'allure-html-report' artifact"
+            echo "2. Extract the ZIP file"
+            echo "3. Open index.html in your browser"
+          displayName: '📊 Display execution summary'

@@ -16,17 +16,49 @@ export default defineConfig({
   retries: testConfig.retries,
 
   // Configuración de reportes mejorada
-  reporter: [
-    ['list'],
-    [
-      'allure-playwright',
-      {
-        detail: true,
-        outputFolder: testConfig.allureResultsDir,
-        suiteTitle: true,
-      },
-    ],
-  ],
+  reporter: testConfig.isCI
+    ? [
+        ['list'],
+        [
+          'allure-playwright',
+          {
+            detail: true,
+            outputFolder: testConfig.allureResultsDir,
+            suiteTitle: true,
+          },
+        ],
+        [
+          'junit',
+          {
+            outputFile: './test-results/results.xml',
+          },
+        ],
+        [
+          'html',
+          {
+            outputFolder: './playwright-report',
+            open: 'never',
+          },
+        ],
+      ]
+    : [
+        ['list'],
+        [
+          'allure-playwright',
+          {
+            detail: true,
+            outputFolder: testConfig.allureResultsDir,
+            suiteTitle: true,
+          },
+        ],
+        [
+          'html',
+          {
+            outputFolder: './playwright-report',
+            open: 'on-failure',
+          },
+        ],
+      ],
 
   // Configuración global de navegador
   use: {
